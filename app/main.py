@@ -1,41 +1,63 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import os
-from dotenv import load_dotenv
+from app.config import settings  # Add 'app.' prefix
+from app.routers import auth_router  # Add 'app.' prefix
 
-load_dotenv()
-
-app = FastAPI(title="CITE-TMS Backend")
+app = FastAPI(
+    title="CITE-TMS Backend",
+    description="Thesis Management System for CITE Department - De La Salle Lipa",
+    version="1.0.0"
+)
 
 # CORS Configuration
-origins = os.getenv("CORS_ORIGINS", "").split(",")
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Include routers
+app.include_router(auth_router)
+
+
 @app.get("/")
 def read_root():
-    return {"message": "CITE-TMS Backend is running!", "status": "success"}
+    return {
+        "message": "CITE-TMS Backend is running!",
+        "status": "success",
+        "version": "1.0.0"
+    }
+
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy", "service": "cite-tms-backend"}
+    return {
+        "status": "healthy",
+        "service": "cite-tms-backend"
+    }
+
 
 @app.get("/test-supabase")
 def test_supabase():
-    from supabase import create_client
+    from app.database import get_supabase  # Add 'app.' prefix
     try:
-        supabase = create_client(
-            os.getenv("SUPABASE_URL"),
-            os.getenv("SUPABASE_KEY")
-        )
+        supabase = get_supabase()
         # Try to query users table
         result = supabase.table("users").select("*").limit(1).execute()
-        return {"status": "success", "message": "Supabase connected!", "data": result.data}
+        return {
+            "status": "success",
+            "message": "Supabase connected!",
+            "data": result.data
+        }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)

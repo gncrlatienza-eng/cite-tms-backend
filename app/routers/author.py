@@ -41,7 +41,7 @@ def _require_author(current_user: TokenData):
         supabase.table("users")
         .select("is_author")
         .eq("id", current_user.user_id)
-        .single()
+        .maybe_single()
         .execute()
     )
     if not result.data or not result.data.get("is_author"):
@@ -58,10 +58,6 @@ def _require_author(current_user: TokenData):
 
 @router.get("/me")
 def get_author_profile(current_user: TokenData = Depends(get_current_user)):
-    """
-    Return the current user's profile including is_author status.
-    Used by the frontend to determine if author nav should be shown.
-    """
     current_user = _require_author(current_user)
     supabase = get_supabase()
 
@@ -69,7 +65,7 @@ def get_author_profile(current_user: TokenData = Depends(get_current_user)):
         supabase.table("users")
         .select("id, email, full_name, role, is_author, secondary_email, department, year_level, student_id")
         .eq("id", current_user.user_id)
-        .single()
+        .maybe_single()
         .execute()
     )
 
@@ -79,12 +75,17 @@ def get_author_profile(current_user: TokenData = Depends(get_current_user)):
     return result.data
 
 
+@router.get("/profile")
+def get_author_profile_alias(current_user: TokenData = Depends(get_current_user)):
+    """Alias for /me — resolves 404 from unknown caller."""
+    return get_author_profile(current_user)
+
+
 @router.patch("/me")
 def update_author_profile(
     body: UserProfileUpdate,
     current_user: TokenData = Depends(get_current_user),
 ):
-    """Author updates their own profile (e.g. secondary_email, full_name)."""
     current_user = _require_author(current_user)
     supabase = get_supabase()
 
@@ -104,6 +105,7 @@ def update_author_profile(
         supabase.table("users")
         .update(payload)
         .eq("id", current_user.user_id)
+        .select()
         .execute()
     )
 
@@ -125,13 +127,6 @@ def author_upload_paper(
     body: PaperCreate,
     current_user: TokenData = Depends(get_current_user),
 ):
-    """
-    Author uploads a new paper.
-
-    Paper is inserted with status='pending_review' — admin must approve
-    before it becomes publicly visible. A review request is also created
-    so the admin sees it in their upgrade-requests queue.
-    """
     current_user = _require_author(current_user)
     supabase = get_supabase()
 
@@ -141,7 +136,6 @@ def author_upload_paper(
             detail=f"access_type must be one of: {', '.join(VALID_ACCESS_TYPES)}"
         )
 
-    # ── Insert paper as pending_review ────────────────────────────────────────
     payload = {
         "title":             body.title,
         "authors":           body.authors,
@@ -151,10 +145,10 @@ def author_upload_paper(
         "file_path":         body.file_path,
         "access_type":       body.access_type or "open",
         "uploaded_by":       current_user.user_id,
-        "status":            "pending_review",  # hidden from public until approved
+        "status":            "pending_review",
     }
 
-    result = supabase.table("papers").insert(payload).execute()
+    result = supabase.table("papers").insert(payload).select().execute()
 
     if not result.data:
         raise HTTPException(
@@ -164,9 +158,6 @@ def author_upload_paper(
 
     paper = result.data[0]
 
-    # ── Create admin review request (hard failure + rollback) ─────────────────
-    # Reuses author_upgrade_requests table so admin sees it in one queue.
-    # For existing authors, admin_decide_upgrade_request safely keeps is_author=true.
     upgrade_result = (
         supabase.table("author_upgrade_requests")
         .insert({
@@ -174,11 +165,11 @@ def author_upload_paper(
             "paper_id": paper["id"],
             "status":   "pending",
         })
+        .select()
         .execute()
     )
 
     if not upgrade_result.data:
-        # Roll back the paper to keep the DB consistent
         supabase.table("papers").delete().eq("id", paper["id"]).execute()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -190,10 +181,6 @@ def author_upload_paper(
 
 @router.get("/papers", response_model=PapersListResponse)
 def author_list_papers(current_user: TokenData = Depends(get_current_user)):
-    """
-    Return all papers uploaded by the current author,
-    including pending_review ones so they can track submissions.
-    """
     current_user = _require_author(current_user)
     supabase = get_supabase()
 
@@ -215,7 +202,6 @@ def author_update_paper(
     body: PaperUpdate,
     current_user: TokenData = Depends(get_current_user),
 ):
-    """Author edits their own paper metadata. Cannot edit others' papers."""
     current_user = _require_author(current_user)
     supabase = get_supabase()
 
@@ -223,7 +209,7 @@ def author_update_paper(
         supabase.table("papers")
         .select("id, uploaded_by")
         .eq("id", paper_id)
-        .single()
+        .maybe_single()
         .execute()
     )
 
@@ -269,6 +255,7 @@ def author_update_paper(
         supabase.table("papers")
         .update(payload)
         .eq("id", paper_id)
+        .select()
         .execute()
     )
 
@@ -286,7 +273,6 @@ def author_delete_paper(
     paper_id: str,
     current_user: TokenData = Depends(get_current_user),
 ):
-    """Author deletes their own paper and removes PDF from storage."""
     current_user = _require_author(current_user)
     supabase = get_supabase()
 
@@ -294,7 +280,7 @@ def author_delete_paper(
         supabase.table("papers")
         .select("id, uploaded_by, file_path")
         .eq("id", paper_id)
-        .single()
+        .maybe_single()
         .execute()
     )
 
@@ -312,7 +298,7 @@ def author_delete_paper(
         try:
             supabase.storage.from_(BUCKET).remove([file_path])
         except Exception:
-            pass  # Non-fatal — storage cleanup failure shouldn't block DB delete
+            pass
 
     supabase.table("papers").delete().eq("id", paper_id).execute()
 
@@ -326,10 +312,6 @@ def author_list_requests(
     status_filter: Optional[str] = None,
     current_user: TokenData = Depends(get_current_user),
 ):
-    """
-    Return all access requests on the current author's papers.
-    Filter by status: ?status_filter=pending
-    """
     current_user = _require_author(current_user)
     supabase = get_supabase()
 
@@ -358,7 +340,6 @@ def author_list_requests(
     response = query.execute()
     rows = response.data or []
 
-    # ── Manual hydration (avoids FK join requirement) ─────────────────────────
     req_paper_ids = list({r["paper_id"]     for r in rows if r.get("paper_id")})
     req_user_ids  = list({r["requester_id"] for r in rows if r.get("requester_id")})
 
@@ -410,51 +391,45 @@ def author_update_request(
     current_user = _require_author(current_user)
     supabase = get_supabase()
 
-    req = (
+    # ── STEP 1: fetch request as a list (avoids maybe_single RLS issue) ───────
+    req_res = (
         supabase.table("access_requests")
         .select("id, paper_id, requester_id, message, status, created_at")
         .eq("id", request_id)
-        .single()
         .execute()
     )
 
-    if not req.data:
+    if not req_res.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found.")
 
-    paper = (
+    req_data = req_res.data[0]
+
+    # ── STEP 2: verify paper ownership ───────────────────────────────────────
+    paper_res = (
         supabase.table("papers")
         .select("id, uploaded_by")
-        .eq("id", req.data["paper_id"])
-        .single()
+        .eq("id", req_data["paper_id"])
         .execute()
     )
 
-    if not paper.data or paper.data.get("uploaded_by") != current_user.user_id:
+    if not paper_res.data or paper_res.data[0].get("uploaded_by") != current_user.user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only manage requests for your own papers."
         )
 
-    result = (
-        supabase.table("access_requests")
-        .update({"status": body.status, "updated_at": datetime.utcnow().isoformat()})
-        .eq("id", request_id)
-        .execute()
-    )
+    # ── STEP 3: update — no .select(), avoids RLS read issue ─────────────────
+    supabase.table("access_requests").update(
+        {"status": body.status, "updated_at": datetime.utcnow().isoformat()}
+    ).eq("id", request_id).execute()
 
-    if not result.data:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update request."
-        )
-
-    row = result.data[0]
+    # ── STEP 4: return using already-fetched data ─────────────────────────────
     return AccessRequestResponse(
-        id=row["id"],
-        paper_id=row["paper_id"],
-        requester_id=row["requester_id"],
-        message=row.get("message"),
-        status=row["status"],
-        created_at=row.get("created_at"),
-        updated_at=row.get("updated_at"),
+        id=req_data["id"],
+        paper_id=req_data["paper_id"],
+        requester_id=req_data["requester_id"],
+        message=req_data.get("message"),
+        status=body.status,
+        created_at=req_data.get("created_at"),
+        updated_at=datetime.utcnow().isoformat(),
     )

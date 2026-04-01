@@ -33,11 +33,16 @@ def _try_supabase_jwt(token: str) -> Optional[TokenData]:
         if not supabase_user_id:
             return None
 
+        # ── Use email lookup instead of id ────────────────────────────────────
+        email = payload.get("email")
+        if not email:
+            return None
+
         supabase = get_supabase()
         result = (
             supabase.table("users")
             .select("*")
-            .eq("id", supabase_user_id)
+            .eq("email", email)  # ← fixed: look up by email not Supabase UUID
             .execute()
         )
 

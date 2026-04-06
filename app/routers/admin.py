@@ -359,17 +359,38 @@ def admin_decide_upgrade_request(request_id: str, body: UpgradeDecision):
         )
 
     if body.action == "approve":
-        # 1. Mark request approved
+        # 1. Verify the user exists before we try to grant author access
+        user_check = (
+            supabase.table("users")
+            .select("id, email, is_author")
+            .eq("id", req["user_id"])
+            .execute()
+        )
+        if not user_check.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User with id '{req['user_id']}' not found in users table. Cannot grant author access."
+            )
+
+        # 2. Mark request approved
         supabase.table("author_upgrade_requests").update(
             {"status": "approved", "updated_at": datetime.utcnow().isoformat()}
         ).eq("id", request_id).execute()
 
-        # 2. Grant author access
-        supabase.table("users").update(
-            {"is_author": True}
-        ).eq("id", req["user_id"]).execute()
+        # 3. Grant author access — check result to catch silent failures
+        author_update = (
+            supabase.table("users")
+            .update({"is_author": True, "updated_at": datetime.utcnow().isoformat()})
+            .eq("id", req["user_id"])
+            .execute()
+        )
+        if not author_update.data:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Request marked approved but failed to set is_author=True for user '{req['user_id']}'."
+            )
 
-        # 3. Publish the paper so it appears publicly
+        # 4. Publish the paper so it appears publicly
         supabase.table("papers").update(
             {"status": "published", "updated_at": datetime.utcnow().isoformat()}
         ).eq("id", req["paper_id"]).execute()
@@ -378,6 +399,7 @@ def admin_decide_upgrade_request(request_id: str, body: UpgradeDecision):
             "message": "Approved. User is now an author and their paper is published.",
             "request_id": request_id,
             "action": "approve",
+            "user_id": req["user_id"],
         }
 
     else:  # reject

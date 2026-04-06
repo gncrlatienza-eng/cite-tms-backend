@@ -38,6 +38,7 @@ class PaperCreate(BaseModel):
     abstract: Optional[str] = None
     file_path: Optional[str] = None
     access_type: Optional[str] = "open"
+    secondary_email: Optional[str] = None
 
 
 class PaperUpdate(BaseModel):

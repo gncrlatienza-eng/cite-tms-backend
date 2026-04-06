@@ -117,6 +117,12 @@ def student_upload_paper(
             detail="Failed to create upgrade request. Paper upload was rolled back."
         )
 
+    # ── 5. Save secondary_email to the user's profile if provided ────────────
+    if body.secondary_email and body.secondary_email.strip():
+        supabase.table("users").update(
+            {"secondary_email": body.secondary_email.strip().lower()}
+        ).eq("id", current_user.user_id).execute()
+
     return _attach_url(paper)
 
 

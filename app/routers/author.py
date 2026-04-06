@@ -148,7 +148,7 @@ def author_upload_paper(
         "status":            "pending_review",
     }
 
-    result = supabase.table("papers").insert(payload).select().execute()
+    result = supabase.table("papers").insert(payload).execute()
 
     if not result.data:
         raise HTTPException(
@@ -165,8 +165,7 @@ def author_upload_paper(
             "paper_id": paper["id"],
             "status":   "pending",
         })
-        .select()
-        .execute()
+        .execute()  # ← .select() removed here
     )
 
     if not upgrade_result.data:

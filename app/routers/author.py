@@ -432,3 +432,24 @@ def author_update_request(
         created_at=req_data.get("created_at"),
         updated_at=datetime.utcnow().isoformat(),
     )
+
+
+# ─────────────────────────────────────────────
+#  AUTHOR UPGRADE REQUESTS
+# ─────────────────────────────────────────────
+
+@router.get("/upload-requests")
+def author_list_upload_requests(current_user: TokenData = Depends(get_current_user)):
+    """Get all paper upload requests (author_upgrade_requests) for the current author."""
+    current_user = _require_author(current_user)
+    supabase = get_supabase()
+
+    result = (
+        supabase.table("author_upgrade_requests")
+        .select("id, status, created_at, updated_at, papers(title, id, year, course_or_program)")
+        .eq("user_id", current_user.user_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    return result.data or []

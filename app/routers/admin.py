@@ -407,15 +407,22 @@ def admin_decide_upgrade_request(request_id: str, body: UpgradeDecision):
             {"status": "rejected", "updated_at": datetime.utcnow().isoformat()}
         ).eq("id", request_id).execute()
 
-        # Mark paper as rejected so the correct status is reflected
-        supabase.table("papers").update(
+        # Mark paper as rejected
+        paper_update = supabase.table("papers").update(
             {"status": "rejected", "updated_at": datetime.utcnow().isoformat()}
         ).eq("id", req["paper_id"]).execute()
 
+        if not paper_update.data:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Upgrade request rejected but failed to update paper status. paper_id='{req['paper_id']}'"
+            )
+
         return {
-            "message": "Rejected. Paper remains hidden from public.",
+            "message": "Rejected. Paper status set to rejected.",
             "request_id": request_id,
             "action": "reject",
+            "paper_id": req["paper_id"],
         }
 
 

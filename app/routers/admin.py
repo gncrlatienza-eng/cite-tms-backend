@@ -359,10 +359,10 @@ def admin_decide_upgrade_request(request_id: str, body: UpgradeDecision):
         )
 
     if body.action == "approve":
-        # 1. Verify the user exists before we try to grant author access
+        # 1. Verify the user exists and fetch secondary_email
         user_check = (
             supabase.table("users")
-            .select("id, email, is_author")
+            .select("id, email, secondary_email, is_author")
             .eq("id", req["user_id"])
             .execute()
         )
@@ -371,6 +371,8 @@ def admin_decide_upgrade_request(request_id: str, body: UpgradeDecision):
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"User with id '{req['user_id']}' not found in users table. Cannot grant author access."
             )
+
+        user = user_check.data[0]
 
         # 2. Mark request approved
         supabase.table("author_upgrade_requests").update(
@@ -394,6 +396,22 @@ def admin_decide_upgrade_request(request_id: str, body: UpgradeDecision):
         supabase.table("papers").update(
             {"status": "published", "updated_at": datetime.utcnow().isoformat()}
         ).eq("id", req["paper_id"]).execute()
+
+        # 5. Add secondary_email to whitelist if present and not already listed
+        secondary_email = user.get("secondary_email")
+        if secondary_email:
+            secondary_email = secondary_email.lower().strip()
+            existing = (
+                supabase.table("author_whitelist")
+                .select("id")
+                .eq("email", secondary_email)
+                .execute()
+            )
+            if not existing.data:
+                supabase.table("author_whitelist").insert({
+                    "email": secondary_email,
+                    "added_by": req["user_id"],
+                }).execute()
 
         return {
             "message": "Approved. User is now an author and their paper is published.",

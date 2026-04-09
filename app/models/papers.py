@@ -14,6 +14,7 @@ class PaperResponse(BaseModel):
     year: Optional[int] = None
     course_or_program: Optional[str] = None
     abstract: Optional[str] = None
+    secondary_email: Optional[str] = None
     file_path: Optional[str] = None
     public_url: Optional[str] = None
     access_type: Optional[str] = "open"    # "open" | "students_only" | "restricted"
@@ -48,6 +49,7 @@ class PaperUpdate(BaseModel):
     year: Optional[int] = None
     course_or_program: Optional[str] = None
     abstract: Optional[str] = None
+    secondary_email: Optional[str] = None
     file_path: Optional[str] = None
     access_type: Optional[str] = None
 

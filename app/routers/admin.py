@@ -37,6 +37,23 @@ def _attach_url(paper: dict) -> dict:
     return paper
 
 
+def _attach_secondary_email_to_papers(supabase, papers: list[dict]) -> list[dict]:
+    user_ids = list({p.get("uploaded_by") for p in papers if p.get("uploaded_by")})
+    users_map = {}
+    if user_ids:
+        users_res = (
+            supabase.table("users")
+            .select("id, secondary_email")
+            .in_("id", user_ids)
+            .execute()
+        )
+        users_map = {u["id"]: u.get("secondary_email") for u in (users_res.data or [])}
+
+    for paper in papers:
+        paper["secondary_email"] = users_map.get(paper.get("uploaded_by"))
+    return papers
+
+
 # ─────────────────────────────────────────────
 #  PAPERS
 # ─────────────────────────────────────────────
@@ -66,7 +83,8 @@ def admin_list_papers(q: Optional[str] = None):
             detail="Failed to fetch papers."
         )
 
-    papers = [_attach_url(p) for p in response.data]
+    papers = _attach_secondary_email_to_papers(supabase, response.data)
+    papers = [_attach_url(p) for p in papers]
     return PapersListResponse(total=len(papers), results=papers)
 
 
@@ -138,6 +156,20 @@ def admin_update_paper(paper_id: str, body: PaperUpdate):
         )
 
     payload["updated_at"] = datetime.utcnow().isoformat()
+
+    if body.secondary_email is not None:
+        existing = (
+            supabase.table("papers")
+            .select("uploaded_by")
+            .eq("id", paper_id)
+            .maybe_single()
+            .execute()
+        )
+        uploaded_by = existing.data.get("uploaded_by") if existing.data else None
+        if uploaded_by:
+            supabase.table("users").update({
+                "secondary_email": body.secondary_email.lower().strip() or None
+            }).eq("id", uploaded_by).execute()
 
     result = (
         supabase.table("papers")

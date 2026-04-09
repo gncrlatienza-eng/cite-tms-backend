@@ -34,6 +34,23 @@ def _attach_url(paper: dict) -> dict:
     return paper
 
 
+def _attach_secondary_email_to_papers(supabase, papers: list[dict]) -> list[dict]:
+    user_ids = list({p.get("uploaded_by") for p in papers if p.get("uploaded_by")})
+    users_map = {}
+    if user_ids:
+        users_res = (
+            supabase.table("users")
+            .select("id, secondary_email")
+            .in_("id", user_ids)
+            .execute()
+        )
+        users_map = {u["id"]: u.get("secondary_email") for u in (users_res.data or [])}
+
+    for paper in papers:
+        paper["secondary_email"] = users_map.get(paper.get("uploaded_by"))
+    return papers
+
+
 def _require_author(current_user: TokenData):
     """Dependency — verify the current user has is_author = true."""
     supabase = get_supabase()
@@ -148,6 +165,11 @@ def author_upload_paper(
         "status":            "pending_review",
     }
 
+    if body.secondary_email is not None:
+        supabase.table("users").update({
+            "secondary_email": body.secondary_email.lower().strip() or None
+        }).eq("id", current_user.user_id).execute()
+
     result = supabase.table("papers").insert(payload).execute()
 
     if not result.data:
@@ -191,7 +213,8 @@ def author_list_papers(current_user: TokenData = Depends(get_current_user)):
         .execute()
     )
 
-    papers = [_attach_url(p) for p in (response.data or [])]
+    papers = _attach_secondary_email_to_papers(supabase, response.data or [])
+    papers = [_attach_url(p) for p in papers]
     return PapersListResponse(total=len(papers), results=papers)
 
 
@@ -249,6 +272,11 @@ def author_update_paper(
         )
 
     payload["updated_at"] = datetime.utcnow().isoformat()
+
+    if body.secondary_email is not None:
+        supabase.table("users").update({
+            "secondary_email": body.secondary_email.lower().strip() or None
+        }).eq("id", current_user.user_id).execute()
 
     result = (
         supabase.table("papers")

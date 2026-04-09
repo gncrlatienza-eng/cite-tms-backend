@@ -47,7 +47,7 @@ def admin_list_papers(q: Optional[str] = None):
     supabase = get_supabase()
 
     query = supabase.table("papers").select(
-        "id, title, authors, year, course_or_program, abstract, file_path, access_type, uploaded_by, created_at, updated_at"
+        "id, title, authors, year, course_or_program, abstract, file_path, access_type, status, uploaded_by, created_at, updated_at"
     ).order("created_at", desc=True)
 
     if q and q.strip():
@@ -406,6 +406,11 @@ def admin_decide_upgrade_request(request_id: str, body: UpgradeDecision):
         supabase.table("author_upgrade_requests").update(
             {"status": "rejected", "updated_at": datetime.utcnow().isoformat()}
         ).eq("id", request_id).execute()
+
+        # Mark paper as rejected so the correct status is reflected
+        supabase.table("papers").update(
+            {"status": "rejected", "updated_at": datetime.utcnow().isoformat()}
+        ).eq("id", req["paper_id"]).execute()
 
         return {
             "message": "Rejected. Paper remains hidden from public.",

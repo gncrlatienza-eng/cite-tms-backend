@@ -17,6 +17,7 @@ class PaperResponse(BaseModel):
     file_path: Optional[str] = None
     public_url: Optional[str] = None
     access_type: Optional[str] = "open"    # "open" | "students_only" | "restricted"
+    status: Optional[str] = "pending"      # "pending" | "published" | "rejected"
     uploaded_by: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

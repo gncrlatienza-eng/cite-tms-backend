@@ -1,13 +1,19 @@
+# Web Framework
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-dotenv==1.0.0
-supabase==2.0.3
 pydantic==2.5.0
 pydantic-settings==2.1.0
+
+# Database & Auth
+supabase==2.0.3
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 python-multipart==0.0.6
 email-validator==2.1.0
+
+# NLP & Math (Fixed Versions)
 sentence-transformers==2.7.0
-numpy==2.2.6
+keybert==0.8.4
 scikit-learn==1.4.0
+numpy>=1.24.0,<2.0.0

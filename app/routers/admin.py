@@ -63,8 +63,12 @@ def admin_list_papers(q: Optional[str] = None):
     """Return all papers. Admin only."""
     supabase = get_supabase()
 
+    # FIX: Added research_type, grammarian_cert_path, turnitin_cert_path,
+    # statistician_cert_path so the admin detail view can display certificates.
     query = supabase.table("papers").select(
-        "id, title, authors, year, course_or_program, abstract, file_path, access_type, status, uploaded_by, created_at, updated_at"
+        "id, title, authors, year, course_or_program, abstract, file_path, "
+        "access_type, status, uploaded_by, created_at, updated_at, "
+        "research_type, grammarian_cert_path, turnitin_cert_path, statistician_cert_path"
     ).order("created_at", desc=True)
 
     if q and q.strip():
@@ -344,7 +348,10 @@ def admin_list_upgrade_requests(status_filter: Optional[str] = None):
 
     papers_map = {}
     if paper_ids:
-        p_res = supabase.table("papers").select("id, title, abstract, file_path, status").in_("id", paper_ids).execute()
+        p_res = supabase.table("papers").select(
+            "id, title, abstract, file_path, status, course_or_program, year, "
+            "research_type, grammarian_cert_path, turnitin_cert_path, statistician_cert_path"
+        ).in_("id", paper_ids).execute()
         papers_map = {p["id"]: p for p in (p_res.data or [])}
 
     enriched = []
@@ -473,6 +480,113 @@ def admin_decide_upgrade_request(request_id: str, body: UpgradeDecision):
             "request_id": request_id,
             "action": "reject",
             "paper_id": req["paper_id"],
+        }
+
+
+# ─────────────────────────────────────────────
+#  UPLOAD PAPER REQUESTS
+#  (authors submitting new papers for review)
+# ─────────────────────────────────────────────
+
+class UploadDecision(BaseModel):
+    action: Literal["approve", "reject"]
+
+
+@router.get("/upload-requests", dependencies=[Depends(require_admin)])
+def admin_list_upload_requests(status_filter: Optional[str] = None):
+    """List all author upload paper requests. Admin only."""
+    supabase = get_supabase()
+
+    query = (
+        supabase.table("author_upload_requests")
+        .select("id, status, created_at, user_id, paper_id")
+        .order("created_at", desc=True)
+    )
+
+    if status_filter:
+        query = query.eq("status", status_filter)
+
+    result = query.execute()
+    rows = result.data or []
+
+    user_ids  = list({r["user_id"]  for r in rows if r.get("user_id")})
+    paper_ids = list({r["paper_id"] for r in rows if r.get("paper_id")})
+
+    users_map = {}
+    if user_ids:
+        u_res = supabase.table("users").select("id, full_name, email").in_("id", user_ids).execute()
+        users_map = {u["id"]: u for u in (u_res.data or [])}
+
+    papers_map = {}
+    if paper_ids:
+        p_res = supabase.table("papers").select(
+            "id, title, abstract, authors, year, course_or_program, file_path, access_type, status, "
+            "research_type, grammarian_cert_path, turnitin_cert_path, statistician_cert_path"
+        ).in_("id", paper_ids).execute()
+        papers_map = {p["id"]: p for p in (p_res.data or [])}
+
+    enriched = []
+    for row in rows:
+        enriched.append({
+            **row,
+            "user":   users_map.get(row["user_id"],  {}),
+            "papers": papers_map.get(row["paper_id"], {}),
+        })
+
+    return enriched
+
+
+@router.post("/upload-requests/{request_id}/decide", dependencies=[Depends(require_admin)])
+def admin_decide_upload_request(request_id: str, body: UploadDecision):
+    """Approve or reject an author's paper upload request."""
+    supabase = get_supabase()
+
+    req_result = (
+        supabase.table("author_upload_requests")
+        .select("id, user_id, paper_id, status")
+        .eq("id", request_id)
+        .single()
+        .execute()
+    )
+
+    if not req_result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload request not found.")
+
+    req = req_result.data
+
+    if req["status"] != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Request is already '{req['status']}' — cannot change it again."
+        )
+
+    if body.action == "approve":
+        supabase.table("author_upload_requests").update(
+            {"status": "approved", "updated_at": datetime.utcnow().isoformat()}
+        ).eq("id", request_id).execute()
+
+        supabase.table("papers").update(
+            {"status": "published", "updated_at": datetime.utcnow().isoformat()}
+        ).eq("id", req["paper_id"]).execute()
+
+        return {
+            "message": "Approved. Paper is now published.",
+            "request_id": request_id,
+            "action": "approve",
+        }
+    else:
+        supabase.table("author_upload_requests").update(
+            {"status": "rejected", "updated_at": datetime.utcnow().isoformat()}
+        ).eq("id", request_id).execute()
+
+        supabase.table("papers").update(
+            {"status": "rejected", "updated_at": datetime.utcnow().isoformat()}
+        ).eq("id", req["paper_id"]).execute()
+
+        return {
+            "message": "Rejected. Paper status set to rejected.",
+            "request_id": request_id,
+            "action": "reject",
         }
 
 

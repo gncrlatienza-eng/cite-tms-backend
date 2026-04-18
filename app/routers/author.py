@@ -20,6 +20,7 @@ router = APIRouter(prefix="/api/author", tags=["author"])
 BUCKET = settings.STORAGE_BUCKET
 
 VALID_ACCESS_TYPES = ("open", "students_only", "restricted")
+VALID_RESEARCH_TYPES = ("qualitative", "quantitative", "mixed_methods")
 
 
 def _get_public_url(file_path: Optional[str]) -> Optional[str]:
@@ -52,7 +53,6 @@ def _attach_secondary_email_to_papers(supabase, papers: list[dict]) -> list[dict
 
 
 def _require_author(current_user: TokenData):
-    """Dependency — verify the current user has is_author = true."""
     supabase = get_supabase()
     result = (
         supabase.table("users")
@@ -94,7 +94,6 @@ def get_author_profile(current_user: TokenData = Depends(get_current_user)):
 
 @router.get("/profile")
 def get_author_profile_alias(current_user: TokenData = Depends(get_current_user)):
-    """Alias for /me — resolves 404 from unknown caller."""
     return get_author_profile(current_user)
 
 
@@ -153,16 +152,42 @@ def author_upload_paper(
             detail=f"access_type must be one of: {', '.join(VALID_ACCESS_TYPES)}"
         )
 
+    if not body.research_type or body.research_type not in VALID_RESEARCH_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"research_type must be one of: {', '.join(VALID_RESEARCH_TYPES)}"
+        )
+
+    if not body.grammarian_cert_path:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Grammarian certificate is required."
+        )
+    if not body.turnitin_cert_path:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Turnitin/plagiarism report is required."
+        )
+    if body.research_type in ("quantitative", "mixed_methods") and not body.statistician_cert_path:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Statistician certificate is required for quantitative or mixed methods research."
+        )
+
     payload = {
-        "title":             body.title,
-        "authors":           body.authors,
-        "year":              body.year,
-        "course_or_program": body.course_or_program,
-        "abstract":          body.abstract,
-        "file_path":         body.file_path,
-        "access_type":       body.access_type or "open",
-        "uploaded_by":       current_user.user_id,
-        "status":            "pending_review",
+        "title":                  body.title,
+        "authors":                body.authors,
+        "year":                   body.year,
+        "course_or_program":      body.course_or_program,
+        "abstract":               body.abstract,
+        "file_path":              body.file_path,
+        "access_type":            body.access_type or "open",
+        "uploaded_by":            current_user.user_id,
+        "status":                 "pending_review",
+        "research_type":          body.research_type,
+        "grammarian_cert_path":   body.grammarian_cert_path,
+        "turnitin_cert_path":     body.turnitin_cert_path,
+        "statistician_cert_path": body.statistician_cert_path,
     }
 
     if body.secondary_email is not None:
@@ -180,17 +205,32 @@ def author_upload_paper(
 
     paper = result.data[0]
 
-    upgrade_result = (
-        supabase.table("author_upgrade_requests")
+    # Check if user is already an author to route to the correct table
+    user_res = (
+        supabase.table("users")
+        .select("is_author")
+        .eq("id", current_user.user_id)
+        .maybe_single()
+        .execute()
+    )
+    is_existing_author = user_res.data and user_res.data.get("is_author", False)
+
+    if is_existing_author:
+        review_table = "author_upload_requests"
+    else:
+        review_table = "author_upgrade_requests"
+
+    review_result = (
+        supabase.table(review_table)
         .insert({
             "user_id":  current_user.user_id,
             "paper_id": paper["id"],
             "status":   "pending",
         })
-        .execute()  # ← .select() removed here
+        .execute()
     )
 
-    if not upgrade_result.data:
+    if not review_result.data:
         supabase.table("papers").delete().eq("id", paper["id"]).execute()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -264,6 +304,14 @@ def author_update_paper(
                 detail=f"access_type must be one of: {', '.join(VALID_ACCESS_TYPES)}"
             )
         payload["access_type"] = body.access_type
+    if body.research_type is not None:
+        payload["research_type"] = body.research_type
+    if body.grammarian_cert_path is not None:
+        payload["grammarian_cert_path"] = body.grammarian_cert_path
+    if body.turnitin_cert_path is not None:
+        payload["turnitin_cert_path"] = body.turnitin_cert_path
+    if body.statistician_cert_path is not None:
+        payload["statistician_cert_path"] = body.statistician_cert_path
 
     if not payload:
         raise HTTPException(
@@ -408,7 +456,6 @@ def author_update_request(
     body: AccessRequestStatusUpdate,
     current_user: TokenData = Depends(get_current_user),
 ):
-    """Author approves or rejects a request on their own paper only."""
     if body.status not in ("approved", "rejected"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -418,7 +465,6 @@ def author_update_request(
     current_user = _require_author(current_user)
     supabase = get_supabase()
 
-    # ── STEP 1: fetch request as a list (avoids maybe_single RLS issue) ───────
     req_res = (
         supabase.table("access_requests")
         .select("id, paper_id, requester_id, message, status, created_at")
@@ -431,7 +477,6 @@ def author_update_request(
 
     req_data = req_res.data[0]
 
-    # ── STEP 2: verify paper ownership ───────────────────────────────────────
     paper_res = (
         supabase.table("papers")
         .select("id, uploaded_by")
@@ -445,12 +490,10 @@ def author_update_request(
             detail="You can only manage requests for your own papers."
         )
 
-    # ── STEP 3: update — no .select(), avoids RLS read issue ─────────────────
     supabase.table("access_requests").update(
         {"status": body.status, "updated_at": datetime.utcnow().isoformat()}
     ).eq("id", request_id).execute()
 
-    # ── STEP 4: return using already-fetched data ─────────────────────────────
     return AccessRequestResponse(
         id=req_data["id"],
         paper_id=req_data["paper_id"],
@@ -463,21 +506,32 @@ def author_update_request(
 
 
 # ─────────────────────────────────────────────
-#  AUTHOR UPGRADE REQUESTS
+#  AUTHOR UPLOAD REQUESTS
 # ─────────────────────────────────────────────
 
 @router.get("/upload-requests")
 def author_list_upload_requests(current_user: TokenData = Depends(get_current_user)):
-    """Get all paper upload requests (author_upgrade_requests) for the current author."""
     current_user = _require_author(current_user)
     supabase = get_supabase()
 
-    result = (
+    # Query Cabinet A (old papers - upgrade requests)
+    result_a = (
         supabase.table("author_upgrade_requests")
         .select("id, status, created_at, updated_at, papers(title, id, year, course_or_program)")
         .eq("user_id", current_user.user_id)
-        .order("created_at", desc=True)
         .execute()
     )
 
-    return result.data or []
+    # Query Cabinet B (new papers - upload requests)
+    result_b = (
+        supabase.table("author_upload_requests")
+        .select("id, status, created_at, updated_at, papers(title, id, year, course_or_program)")
+        .eq("user_id", current_user.user_id)
+        .execute()
+    )
+
+    # Merge both and sort by created_at newest first
+    combined = (result_a.data or []) + (result_b.data or [])
+    combined.sort(key=lambda x: x["created_at"], reverse=True)
+
+    return combined

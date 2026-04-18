@@ -10,6 +10,8 @@ router = APIRouter(prefix="/api/student", tags=["student"])
 
 BUCKET = settings.STORAGE_BUCKET
 
+VALID_RESEARCH_TYPES = ("qualitative", "quantitative", "mixed_methods")
+
 
 def _get_public_url(file_path: Optional[str]) -> Optional[str]:
     if not file_path:
@@ -28,23 +30,36 @@ def student_upload_paper(
     body: PaperCreate,
     current_user: TokenData = Depends(get_current_user),
 ):
-    """
-    Student uploads their own research paper as an author upgrade application.
-
-    Flow:
-      1. Paper is inserted with status='pending_review' — hidden from public.
-      2. A row is created in `author_upgrade_requests` with status='pending'.
-      3. Admin reviews and approves → is_author=true + paper status='published'.
-      4. Student logs back in as Author.
-
-    NOTE: is_author is NOT set here — that is the admin's job on approval.
-    """
     supabase = get_supabase()
 
     if body.access_type not in ("open", "students_only", "restricted"):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="access_type must be 'open', 'students_only', or 'restricted'."
+        )
+
+    # ── Validate research_type ────────────────────────────────────────────────
+    if not body.research_type or body.research_type not in VALID_RESEARCH_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"research_type must be one of: {', '.join(VALID_RESEARCH_TYPES)}"
+        )
+
+    # ── Validate required certificates ───────────────────────────────────────
+    if not body.grammarian_cert_path:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Grammarian certificate is required."
+        )
+    if not body.turnitin_cert_path:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Turnitin/plagiarism report is required."
+        )
+    if body.research_type in ("quantitative", "mixed_methods") and not body.statistician_cert_path:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Statistician certificate is required for quantitative or mixed methods research."
         )
 
     # ── 1. Block if already an author ─────────────────────────────────────────
@@ -75,17 +90,22 @@ def student_upload_paper(
             detail="You already have a pending author upgrade request. Please wait for admin approval."
         )
 
-    # ── 3. Insert paper with pending_review status ────────────────────────────
+    # ── 3. Insert paper ───────────────────────────────────────────────────────
     paper_payload = {
-        "title":             body.title,
-        "authors":           body.authors,
-        "year":              body.year,
-        "course_or_program": body.course_or_program,
-        "abstract":          body.abstract,
-        "file_path":         body.file_path,
-        "access_type":       body.access_type or "open",
-        "uploaded_by":       current_user.user_id,
-        "status":            "pending_review",  # hidden from public until approved
+        "title":                  body.title,
+        "authors":                body.authors,
+        "year":                   body.year,
+        "course_or_program":      body.course_or_program,
+        "abstract":               body.abstract,
+        "file_path":              body.file_path,
+        "access_type":            body.access_type or "open",
+        "uploaded_by":            current_user.user_id,
+        "status":                 "pending_review",
+        # ── certificates ──
+        "research_type":          body.research_type,
+        "grammarian_cert_path":   body.grammarian_cert_path,
+        "turnitin_cert_path":     body.turnitin_cert_path,
+        "statistician_cert_path": body.statistician_cert_path,
     }
 
     paper_result = supabase.table("papers").insert(paper_payload).execute()
@@ -98,7 +118,7 @@ def student_upload_paper(
 
     paper = paper_result.data[0]
 
-    # ── 4. Create author upgrade request (hard failure + rollback) ────────────
+    # ── 4. Create author upgrade request ──────────────────────────────────────
     upgrade_result = (
         supabase.table("author_upgrade_requests")
         .insert({
@@ -110,14 +130,13 @@ def student_upload_paper(
     )
 
     if not upgrade_result.data:
-        # Roll back the paper to keep the DB consistent
         supabase.table("papers").delete().eq("id", paper["id"]).execute()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create upgrade request. Paper upload was rolled back."
         )
 
-    # ── 5. Save secondary_email to the user's profile if provided ────────────
+    # ── 5. Save secondary_email ───────────────────────────────────────────────
     if body.secondary_email and body.secondary_email.strip():
         supabase.table("users").update(
             {"secondary_email": body.secondary_email.strip().lower()}
@@ -130,10 +149,6 @@ def student_upload_paper(
 def get_upgrade_status(
     current_user: TokenData = Depends(get_current_user),
 ):
-    """
-    Returns the student's most recent author upgrade request status.
-    Frontend uses this to show pending / approved / rejected state.
-    """
     supabase = get_supabase()
 
     result = (

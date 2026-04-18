@@ -17,11 +17,17 @@ class PaperResponse(BaseModel):
     secondary_email: Optional[str] = None
     file_path: Optional[str] = None
     public_url: Optional[str] = None
-    access_type: Optional[str] = "open"    # "open" | "students_only" | "restricted"
-    status: Optional[str] = "pending"      # "pending" | "published" | "rejected"
+    access_type: Optional[str] = "open"
+    status: Optional[str] = "pending"
     uploaded_by: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    # ── New certificate fields ──
+    research_type: Optional[str] = None                  # "qualitative" | "quantitative" | "mixed_methods"
+    grammarian_cert_path: Optional[str] = None
+    turnitin_cert_path: Optional[str] = None
+    statistician_cert_path: Optional[str] = None         # only for quantitative / mixed
 
     class Config:
         from_attributes = True
@@ -42,6 +48,12 @@ class PaperCreate(BaseModel):
     access_type: Optional[str] = "open"
     secondary_email: Optional[str] = None
 
+    # ── New certificate fields ──
+    research_type: Optional[str] = None
+    grammarian_cert_path: Optional[str] = None
+    turnitin_cert_path: Optional[str] = None
+    statistician_cert_path: Optional[str] = None
+
 
 class PaperUpdate(BaseModel):
     title: Optional[str] = None
@@ -52,6 +64,12 @@ class PaperUpdate(BaseModel):
     secondary_email: Optional[str] = None
     file_path: Optional[str] = None
     access_type: Optional[str] = None
+
+    # ── New certificate fields ──
+    research_type: Optional[str] = None
+    grammarian_cert_path: Optional[str] = None
+    turnitin_cert_path: Optional[str] = None
+    statistician_cert_path: Optional[str] = None
 
 
 # ─────────────────────────────────────────────
@@ -101,16 +119,14 @@ class AccessRequestResponse(BaseModel):
     paper_id: str
     requester_id: str
     message: Optional[str] = None
-    status: str                             # "pending" | "approved" | "rejected"
+    status: str
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    # Flattened paper info
     paper_title: Optional[str] = None
     paper_course_or_program: Optional[str] = None
     paper_year: Optional[int] = None
 
-    # Flattened requester info
     requester_email: Optional[str] = None
     requester_name: Optional[str] = None
 
@@ -119,7 +135,7 @@ class AccessRequestResponse(BaseModel):
 
 
 class AccessRequestStatusUpdate(BaseModel):
-    status: str                             # "approved" | "rejected"
+    status: str
 
 
 # ─────────────────────────────────────────────

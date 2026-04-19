@@ -5,7 +5,8 @@ from rank_bm25 import BM25Okapi
 from rapidfuzz import fuzz
 import numpy as np
 
-_embedding_model = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2")
+# ── Lazy-loaded — not initialized until first search request ──────────────────
+_embedding_model = None
 
 _paper_cache = []
 _paper_embeddings = None
@@ -25,8 +26,18 @@ PROGRAM_KEYWORDS = {
 }
 
 
+def _get_model() -> TextEmbedding:
+    """Load the embedding model lazily on first use."""
+    global _embedding_model
+    if _embedding_model is None:
+        print("[NLP] Loading embedding model...")
+        _embedding_model = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2")
+        print("[NLP] Embedding model loaded.")
+    return _embedding_model
+
+
 def _encode(texts: list) -> np.ndarray:
-    return np.array(list(_embedding_model.embed(texts)))
+    return np.array(list(_get_model().embed(texts)))
 
 
 def _ensure_index():

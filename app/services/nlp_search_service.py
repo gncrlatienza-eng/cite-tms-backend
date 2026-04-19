@@ -29,6 +29,13 @@ def _encode(texts: list) -> np.ndarray:
     return np.array(list(_embedding_model.embed(texts)))
 
 
+def _ensure_index():
+    """Build index lazily on first request."""
+    global _paper_embeddings
+    if _paper_embeddings is None:
+        build_index()
+
+
 def _match_program(query: str) -> list[str]:
     q = query.lower()
     for code, aliases in PROGRAM_KEYWORDS.items():
@@ -54,7 +61,7 @@ def _build_topic_index(papers: list):
 
     if papers:
         texts = [f"{p.get('title', '')} {p.get('abstract', '')}" for p in papers]
-        
+
         vectorizer = TfidfVectorizer(
             ngram_range=(1, 3),
             stop_words="english",
@@ -62,7 +69,7 @@ def _build_topic_index(papers: list):
         )
         vectorizer.fit(texts)
         extracted = list(vectorizer.get_feature_names_out())
-        
+
         programs = list(set(
             p.get("course_or_program", "")
             for p in papers
@@ -131,6 +138,8 @@ def refresh_index():
 
 
 def suggest_topics(query: str, top_k: int = 8, threshold: float = 0.35) -> list[str]:
+    _ensure_index()
+
     if not _topic_cache or _topic_embeddings is None:
         return [query]
 
@@ -149,6 +158,8 @@ def suggest_topics(query: str, top_k: int = 8, threshold: float = 0.35) -> list[
 
 
 def search_papers(query: str, top_k: int = 15, threshold: float = 0.12) -> list:
+    _ensure_index()
+
     if _paper_embeddings is None or not _paper_cache or _bm25 is None:
         return []
 

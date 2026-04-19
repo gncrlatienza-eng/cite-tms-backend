@@ -10,7 +10,6 @@ from app.routers.papers import router as papers_router
 from app.routers.admin import router as admin_router
 from app.routers.author import router as author_router
 from app.routers.student import router as student_router
-from app.services.nlp_search_service import build_index  # ← only change
 
 app = FastAPI(
     title="CITE-TMS Backend",
@@ -32,11 +31,6 @@ app.include_router(papers_router)
 app.include_router(admin_router)
 app.include_router(author_router)
 app.include_router(student_router)
-
-@app.on_event("startup")
-def startup():
-    print("[NLP] Building index...")
-    build_index()  # ← only change
 
 @app.get("/")
 def read_root():

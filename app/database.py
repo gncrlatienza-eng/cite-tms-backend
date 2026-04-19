@@ -1,28 +1,32 @@
 from supabase import create_client, Client
 from app.config import settings
+import httpx
+from supabase.lib.client_options import ClientOptions
+
+# Force HTTP/1.1 to fix Railway + Supabase connection drops
+http1_transport = httpx.HTTPTransport(http2=False)
+httpx_client = httpx.Client(transport=http1_transport)
+
+options = ClientOptions(httpx_client_args={"transport": http1_transport})
 
 # Anon client — for frontend-facing operations that respect RLS
 supabase: Client = create_client(
     settings.SUPABASE_URL,
-    settings.SUPABASE_ANON_KEY
+    settings.SUPABASE_ANON_KEY,
+    options=options
 )
 
 # Service role client — bypasses RLS, used by all backend routers
 supabase_admin: Client = create_client(
     settings.SUPABASE_URL,
-    settings.SUPABASE_SERVICE_KEY
+    settings.SUPABASE_SERVICE_KEY,
+    options=options
 )
 
 
 def get_supabase() -> Client:
-    """
-    Returns the SERVICE ROLE client.
-    All backend routers use this — it bypasses RLS so inserts/selects
-    are never silently blocked by missing policies.
-    """
-    return supabase_admin  # ← was returning `supabase` (anon), now fixed
+    return supabase_admin
 
 
 def get_supabase_admin() -> Client:
-    """Explicit alias — same as get_supabase(), kept for clarity."""
     return supabase_admin

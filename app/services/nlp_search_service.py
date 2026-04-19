@@ -1,12 +1,12 @@
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 from keybert import KeyBERT
 from sklearn.metrics.pairwise import cosine_similarity
 from rank_bm25 import BM25Okapi
 from rapidfuzz import fuzz
 import numpy as np
 
-_model = SentenceTransformer("all-MiniLM-L6-v2")
-_kw_model = KeyBERT(model=_model)
+_embedding_model = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2")
+_kw_model = KeyBERT()
 
 _paper_cache = []
 _paper_embeddings = None
@@ -26,6 +26,11 @@ PROGRAM_KEYWORDS = {
 }
 
 
+def _encode(texts: list) -> np.ndarray:
+    """Encode a list of texts into embeddings using fastembed."""
+    return np.array(list(_embedding_model.embed(texts)))
+
+
 def _match_program(query: str) -> list[str]:
     q = query.lower()
     for code, aliases in PROGRAM_KEYWORDS.items():
@@ -40,7 +45,7 @@ def _build_paper_index(papers: list):
     global _paper_cache, _paper_embeddings, _bm25
     _paper_cache = papers
     texts = [f"{p.get('title', '')} {p.get('abstract', '')}" for p in papers]
-    _paper_embeddings = _model.encode(texts, show_progress_bar=False)
+    _paper_embeddings = _encode(texts)
     _bm25 = BM25Okapi([t.lower().split() for t in texts])
 
 
@@ -67,7 +72,7 @@ def _build_topic_index(papers: list):
         ))
 
     _topic_cache = list(set(extracted + programs))
-    _topic_embeddings = _model.encode(_topic_cache, show_progress_bar=False)
+    _topic_embeddings = _encode(_topic_cache)
     print(f"[NLP] Topics: {len(extracted)} extracted, {len(programs)} programs")
 
 
@@ -95,7 +100,7 @@ def _auto_expand_query(query: str) -> str:
     if not _topic_graph or _topic_embeddings is None:
         return query
 
-    q_vec = _model.encode([query])
+    q_vec = _encode([query])
     scores = cosine_similarity(q_vec, _topic_embeddings)[0]
 
     best_idx = int(scores.argmax())
@@ -131,7 +136,7 @@ def suggest_topics(query: str, top_k: int = 8, threshold: float = 0.35) -> list[
     if not _topic_cache or _topic_embeddings is None:
         return [query]
 
-    q_vec = _model.encode([query])
+    q_vec = _encode([query])
     scores = cosine_similarity(q_vec, _topic_embeddings)[0]
     ranked = sorted(
         [(i, float(scores[i])) for i in range(len(scores)) if scores[i] >= threshold],
@@ -152,7 +157,7 @@ def search_papers(query: str, top_k: int = 15, threshold: float = 0.12) -> list:
     expanded_query = _auto_expand_query(query)
 
     # --- Semantic score on expanded query ---
-    q_vec = _model.encode([expanded_query])
+    q_vec = _encode([expanded_query])
     semantic_scores = cosine_similarity(q_vec, _paper_embeddings)[0]
 
     # --- BM25 on original query ---

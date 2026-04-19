@@ -10,10 +10,12 @@ supabase==2.0.3
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 python-multipart==0.0.6
-email-validator==2.1.0
+email-validator==2.2.0
 
-# NLP & Math (Fixed Versions)
-sentence-transformers==2.7.0
+# NLP & Search (lightweight - no torch)
+fastembed==0.3.6
 keybert==0.8.4
 scikit-learn==1.4.0
 numpy>=1.24.0,<2.0.0
+rank-bm25==0.2.2
+rapidfuzz==3.6.2

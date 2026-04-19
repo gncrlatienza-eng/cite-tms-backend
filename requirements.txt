@@ -12,9 +12,8 @@ passlib[bcrypt]==1.7.4
 python-multipart==0.0.6
 email-validator==2.2.0
 
-# NLP & Search (lightweight - no torch)
+# NLP & Search (lightweight - no torch, no keybert)
 fastembed==0.8.0
-keybert==0.8.4 --no-deps
 scikit-learn>=1.4.0
 numpy>=1.24.0
 rank-bm25==0.2.2

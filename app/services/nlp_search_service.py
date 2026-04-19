@@ -1,12 +1,11 @@
 from fastembed import TextEmbedding
-from keybert import KeyBERT
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from rank_bm25 import BM25Okapi
 from rapidfuzz import fuzz
 import numpy as np
 
 _embedding_model = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2")
-_kw_model = KeyBERT()
 
 _paper_cache = []
 _paper_embeddings = None
@@ -27,7 +26,6 @@ PROGRAM_KEYWORDS = {
 
 
 def _encode(texts: list) -> np.ndarray:
-    """Encode a list of texts into embeddings using fastembed."""
     return np.array(list(_embedding_model.embed(texts)))
 
 
@@ -55,16 +53,16 @@ def _build_topic_index(papers: list):
     programs = []
 
     if papers:
-        combined = " ".join(f"{p.get('title', '')} {p.get('abstract', '')}" for p in papers)
-        kws = _kw_model.extract_keywords(
-            combined,
-            keyphrase_ngram_range=(1, 3),
+        texts = [f"{p.get('title', '')} {p.get('abstract', '')}" for p in papers]
+        
+        vectorizer = TfidfVectorizer(
+            ngram_range=(1, 3),
             stop_words="english",
-            top_n=200,
-            use_mmr=True,
-            diversity=0.5,
+            max_features=200,
         )
-        extracted = [kw for kw, _ in kws]
+        vectorizer.fit(texts)
+        extracted = list(vectorizer.get_feature_names_out())
+        
         programs = list(set(
             p.get("course_or_program", "")
             for p in papers
@@ -156,15 +154,12 @@ def search_papers(query: str, top_k: int = 15, threshold: float = 0.12) -> list:
 
     expanded_query = _auto_expand_query(query)
 
-    # --- Semantic score on expanded query ---
     q_vec = _encode([expanded_query])
     semantic_scores = cosine_similarity(q_vec, _paper_embeddings)[0]
 
-    # --- BM25 on original query ---
     bm25_raw = np.array(_bm25.get_scores(query.lower().split()))
     bm25_norm = bm25_raw / (bm25_raw.max() + 1e-9)
 
-    # --- Adaptive weighting: short queries trust semantic more ---
     query_len = len(query.split())
     sem_weight = 0.75 if query_len <= 2 else 0.5
     hybrid_scores = sem_weight * semantic_scores + (1 - sem_weight) * bm25_norm

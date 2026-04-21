@@ -51,7 +51,7 @@ def _require_author(current_user: TokenData):
         .execute()
     )
 
-    # If not found, try matching by secondary email (secondary email login)
+    # If not found by ID, try matching by secondary email (secondary email login)
     if not result.data:
         auth_user  = supabase.auth.admin.get_user_by_id(current_user.user_id)
         auth_email = auth_user.user.email if auth_user and auth_user.user else None
@@ -77,7 +77,6 @@ def _require_author(current_user: TokenData):
 # ─────────────────────────────────────────────
 
 @router.get("/me")
-@router.get("/profile")
 def get_author_profile(current_user: TokenData = Depends(get_current_user)):
     current_user = _require_author(current_user)
     result = (
@@ -90,6 +89,10 @@ def get_author_profile(current_user: TokenData = Depends(get_current_user)):
     if not result.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
     return result.data
+
+@router.get("/profile")
+def get_author_profile_alias(current_user: TokenData = Depends(get_current_user)):
+    return get_author_profile(current_user)
 
 
 @router.patch("/me")
@@ -204,16 +207,16 @@ def author_update_paper(paper_id: str, body: PaperUpdate, current_user: TokenDat
         raise HTTPException(status_code=403, detail="You can only edit your own papers.")
 
     payload = {}
-    if body.title is not None:             payload["title"]                  = body.title
-    if body.authors is not None:           payload["authors"]                = body.authors
-    if body.year is not None:              payload["year"]                   = body.year
-    if body.course_or_program is not None: payload["course_or_program"]      = body.course_or_program
-    if body.abstract is not None:          payload["abstract"]               = body.abstract
-    if body.file_path is not None:         payload["file_path"]              = body.file_path
-    if body.research_type is not None:     payload["research_type"]          = body.research_type
-    if body.grammarian_cert_path is not None:   payload["grammarian_cert_path"]   = body.grammarian_cert_path
-    if body.turnitin_cert_path is not None:     payload["turnitin_cert_path"]     = body.turnitin_cert_path
-    if body.statistician_cert_path is not None: payload["statistician_cert_path"] = body.statistician_cert_path
+    if body.title is not None:                      payload["title"]                  = body.title
+    if body.authors is not None:                    payload["authors"]                = body.authors
+    if body.year is not None:                       payload["year"]                   = body.year
+    if body.course_or_program is not None:          payload["course_or_program"]      = body.course_or_program
+    if body.abstract is not None:                   payload["abstract"]               = body.abstract
+    if body.file_path is not None:                  payload["file_path"]              = body.file_path
+    if body.research_type is not None:              payload["research_type"]          = body.research_type
+    if body.grammarian_cert_path is not None:       payload["grammarian_cert_path"]   = body.grammarian_cert_path
+    if body.turnitin_cert_path is not None:         payload["turnitin_cert_path"]     = body.turnitin_cert_path
+    if body.statistician_cert_path is not None:     payload["statistician_cert_path"] = body.statistician_cert_path
     if body.access_type is not None:
         if body.access_type not in VALID_ACCESS_TYPES:
             raise HTTPException(status_code=422, detail=f"access_type must be one of: {', '.join(VALID_ACCESS_TYPES)}")

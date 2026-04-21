@@ -4,9 +4,12 @@ from sklearn.metrics.pairwise import cosine_similarity
 from rank_bm25 import BM25Okapi
 from rapidfuzz import fuzz
 import numpy as np
+import threading
 
-# ── Lazy-loaded — not initialized until first search request ──────────────────
+# ── Globals ───────────────────────────────────────────────────────────────────
 _embedding_model = None
+_model_lock = threading.Lock()
+_index_lock = threading.Lock()
 
 _paper_cache = []
 _paper_embeddings = None
@@ -16,23 +19,27 @@ _topic_embeddings = None
 _topic_graph = {}
 
 PROGRAM_KEYWORDS = {
-    "BSCS": ["bscs", "computer science", "bachelor of science in computer science"],
-    "BSIT": ["bsit", "information technology", "bachelor of science in information technology"],
-    "BSCpE": ["bscpe", "bscoe", "computer engineering", "bachelor of science in computer engineering"],
-    "BSEE": ["bsee", "electrical engineering", "bachelor of science in electrical engineering"],
-    "BSEMC": ["bsemc", "entertainment", "multimedia computing", "bachelor of science in entertainment and multimedia computing"],
-    "BSIE": ["bsie", "industrial engineering", "bachelor of science in industrial engineering"],
+    "BSCS":   ["bscs", "computer science", "bachelor of science in computer science"],
+    "BSIT":   ["bsit", "information technology", "bachelor of science in information technology"],
+    "BSCpE":  ["bscpe", "bscoe", "computer engineering", "bachelor of science in computer engineering"],
+    "BSEE":   ["bsee", "electrical engineering", "bachelor of science in electrical engineering"],
+    "BSEMC":  ["bsemc", "entertainment", "multimedia computing", "bachelor of science in entertainment and multimedia computing"],
+    "BSIE":   ["bsie", "industrial engineering", "bachelor of science in industrial engineering"],
     "BSARCH": ["bsarch", "architecture", "bachelor of science in architecture"],
 }
 
 
 def _get_model() -> TextEmbedding:
-    """Load the embedding model lazily on first use."""
+    """Load the embedding model lazily — thread-safe, only loads once."""
     global _embedding_model
-    if _embedding_model is None:
-        print("[NLP] Loading embedding model...")
-        _embedding_model = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2")
-        print("[NLP] Embedding model loaded.")
+    if _embedding_model is not None:
+        return _embedding_model
+    with _model_lock:
+        # Double-check after acquiring lock (another thread may have loaded it)
+        if _embedding_model is None:
+            print("[NLP] Loading embedding model...")
+            _embedding_model = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2")
+            print("[NLP] Embedding model loaded.")
     return _embedding_model
 
 
@@ -41,10 +48,13 @@ def _encode(texts: list) -> np.ndarray:
 
 
 def _ensure_index():
-    """Build index lazily on first request."""
+    """Build index lazily on first request — thread-safe."""
     global _paper_embeddings
-    if _paper_embeddings is None:
-        build_index()
+    if _paper_embeddings is not None:
+        return
+    with _index_lock:
+        if _paper_embeddings is None:
+            build_index()
 
 
 def _match_program(query: str) -> list[str]:
@@ -72,20 +82,10 @@ def _build_topic_index(papers: list):
 
     if papers:
         texts = [f"{p.get('title', '')} {p.get('abstract', '')}" for p in papers]
-
-        vectorizer = TfidfVectorizer(
-            ngram_range=(1, 3),
-            stop_words="english",
-            max_features=200,
-        )
+        vectorizer = TfidfVectorizer(ngram_range=(1, 3), stop_words="english", max_features=200)
         vectorizer.fit(texts)
         extracted = list(vectorizer.get_feature_names_out())
-
-        programs = list(set(
-            p.get("course_or_program", "")
-            for p in papers
-            if p.get("course_or_program")
-        ))
+        programs = list(set(p.get("course_or_program", "") for p in papers if p.get("course_or_program")))
 
     _topic_cache = list(set(extracted + programs))
     _topic_embeddings = _encode(_topic_cache)
@@ -98,14 +98,9 @@ def _build_topic_graph(threshold: float = 0.45):
         return
 
     similarity_matrix = cosine_similarity(_topic_embeddings, _topic_embeddings)
-
     _topic_graph = {}
     for i, topic in enumerate(_topic_cache):
-        related = [
-            _topic_cache[j]
-            for j, score in enumerate(similarity_matrix[i])
-            if i != j and score >= threshold
-        ]
+        related = [_topic_cache[j] for j, score in enumerate(similarity_matrix[i]) if i != j and score >= threshold]
         if related:
             _topic_graph[topic] = related
 
@@ -118,7 +113,6 @@ def _auto_expand_query(query: str) -> str:
 
     q_vec = _encode([query])
     scores = cosine_similarity(q_vec, _topic_embeddings)[0]
-
     best_idx = int(scores.argmax())
     best_score = float(scores[best_idx])
 
@@ -127,7 +121,6 @@ def _auto_expand_query(query: str) -> str:
 
     best_topic = _topic_cache[best_idx]
     related = _topic_graph.get(best_topic, [])
-
     return " ".join([query, best_topic] + related[:5]).strip()
 
 
@@ -146,6 +139,18 @@ def build_index():
 
 def refresh_index():
     build_index()
+
+
+def warm_up():
+    """
+    Call this once at app startup (e.g. in a startup event handler).
+    Pre-loads the model and builds the index so the first real request
+    never hits a cold start or race condition.
+    """
+    print("[NLP] Warming up model and index...")
+    _get_model()
+    _ensure_index()
+    print("[NLP] Warm-up complete.")
 
 
 def suggest_topics(query: str, top_k: int = 8, threshold: float = 0.35) -> list[str]:
@@ -192,7 +197,6 @@ def search_papers(query: str, top_k: int = 15, threshold: float = 0.12) -> list:
     for i, score in enumerate(hybrid_scores):
         program = _paper_cache[i].get("course_or_program", "")
         title = _paper_cache[i].get("title", "").lower()
-
         program_match = any(code == program for code in matched_programs)
 
         if score < threshold and not program_match:
@@ -200,7 +204,6 @@ def search_papers(query: str, top_k: int = 15, threshold: float = 0.12) -> list:
 
         title_boost = 0.10 if fuzz.partial_ratio(query.lower(), title) >= 70 else 0.0
         program_boost = 0.25 if program_match else 0.0
-
         results.append((i, min(float(score) + title_boost + program_boost, 1.0)))
 
     ranked = sorted(results, key=lambda x: x[1], reverse=True)[:top_k]

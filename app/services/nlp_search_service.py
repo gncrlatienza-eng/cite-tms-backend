@@ -35,16 +35,22 @@ def _get_model() -> TextEmbedding:
     if _embedding_model is not None:
         return _embedding_model
     with _model_lock:
-        # Double-check after acquiring lock (another thread may have loaded it)
         if _embedding_model is None:
-            print("[NLP] Loading embedding model...")
-            _embedding_model = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2")
-            print("[NLP] Embedding model loaded.")
+            try:
+                print("[NLP] Loading embedding model...")
+                # ── Lightweight model (~60MB) — replaces all-MiniLM-L6-v2 (~90MB) ──
+                _embedding_model = TextEmbedding("BAAI/bge-small-en-v1.5")
+                print("[NLP] Embedding model loaded.")
+            except Exception as e:
+                print(f"[NLP] Model load failed: {e}. Falling back to BM25 only.")
     return _embedding_model
 
 
-def _encode(texts: list) -> np.ndarray:
-    return np.array(list(_get_model().embed(texts)))
+def _encode(texts: list):
+    model = _get_model()
+    if model is None:
+        return None
+    return np.array(list(model.embed(texts)))
 
 
 def _ensure_index():
@@ -71,14 +77,14 @@ def _build_paper_index(papers: list):
     global _paper_cache, _paper_embeddings, _bm25
     _paper_cache = papers
     texts = [f"{p.get('title', '')} {p.get('abstract', '')}" for p in papers]
-    _paper_embeddings = _encode(texts)
+    embeddings = _encode(texts)
+    _paper_embeddings = embeddings if embeddings is not None else np.zeros((len(papers), 1))
     _bm25 = BM25Okapi([t.lower().split() for t in texts])
 
 
 def _build_topic_index(papers: list):
     global _topic_cache, _topic_embeddings
-    extracted = []
-    programs = []
+    extracted, programs = [], []
 
     if papers:
         texts = [f"{p.get('title', '')} {p.get('abstract', '')}" for p in papers]
@@ -112,11 +118,12 @@ def _auto_expand_query(query: str) -> str:
         return query
 
     q_vec = _encode([query])
+    if q_vec is None:
+        return query
+
     scores = cosine_similarity(q_vec, _topic_embeddings)[0]
     best_idx = int(scores.argmax())
-    best_score = float(scores[best_idx])
-
-    if best_score < 0.35:
+    if float(scores[best_idx]) < 0.35:
         return query
 
     best_topic = _topic_cache[best_idx]
@@ -142,11 +149,7 @@ def refresh_index():
 
 
 def warm_up():
-    """
-    Call this once at app startup (e.g. in a startup event handler).
-    Pre-loads the model and builds the index so the first real request
-    never hits a cold start or race condition.
-    """
+    """Call once at app startup to pre-load model and index before requests hit."""
     print("[NLP] Warming up model and index...")
     _get_model()
     _ensure_index()
@@ -160,6 +163,9 @@ def suggest_topics(query: str, top_k: int = 8, threshold: float = 0.35) -> list[
         return [query]
 
     q_vec = _encode([query])
+    if q_vec is None:
+        return [query]
+
     scores = cosine_similarity(q_vec, _topic_embeddings)[0]
     ranked = sorted(
         [(i, float(scores[i])) for i in range(len(scores)) if scores[i] >= threshold],
@@ -176,20 +182,27 @@ def suggest_topics(query: str, top_k: int = 8, threshold: float = 0.35) -> list[
 def search_papers(query: str, top_k: int = 15, threshold: float = 0.12) -> list:
     _ensure_index()
 
-    if _paper_embeddings is None or not _paper_cache or _bm25 is None:
+    if not _paper_cache or _bm25 is None:
         return []
 
-    expanded_query = _auto_expand_query(query)
-
-    q_vec = _encode([expanded_query])
-    semantic_scores = cosine_similarity(q_vec, _paper_embeddings)[0]
-
+    # ── BM25 scores (always available) ──
     bm25_raw = np.array(_bm25.get_scores(query.lower().split()))
     bm25_norm = bm25_raw / (bm25_raw.max() + 1e-9)
 
-    query_len = len(query.split())
-    sem_weight = 0.75 if query_len <= 2 else 0.5
-    hybrid_scores = sem_weight * semantic_scores + (1 - sem_weight) * bm25_norm
+    # ── Semantic scores (only if model loaded) ──
+    if _paper_embeddings is not None and _get_model() is not None:
+        expanded_query = _auto_expand_query(query)
+        q_vec = _encode([expanded_query])
+        if q_vec is not None:
+            semantic_scores = cosine_similarity(q_vec, _paper_embeddings)[0]
+            query_len = len(query.split())
+            sem_weight = 0.75 if query_len <= 2 else 0.5
+            hybrid_scores = sem_weight * semantic_scores + (1 - sem_weight) * bm25_norm
+        else:
+            hybrid_scores = bm25_norm
+    else:
+        print("[NLP] Semantic model unavailable — using BM25 only.")
+        hybrid_scores = bm25_norm
 
     matched_programs = _match_program(query)
 

@@ -42,6 +42,8 @@ def _attach_secondary_email_to_papers(supabase, papers: list[dict]) -> list[dict
 def _require_author(current_user: TokenData):
     supabase = get_supabase()
 
+    print(f"[_require_author] user_id: {current_user.user_id}, email: {current_user.email}")
+
     # Try matching by primary user ID first
     result = (
         supabase.table("users")
@@ -51,10 +53,13 @@ def _require_author(current_user: TokenData):
         .execute()
     )
 
-    # If not found by ID, try matching by secondary email (secondary email login)
+    print(f"[_require_author] primary lookup result: {result.data}")
+
+    # If not found by ID, try matching by secondary email
     if not result.data:
         auth_user  = supabase.auth.admin.get_user_by_id(current_user.user_id)
         auth_email = auth_user.user.email if auth_user and auth_user.user else None
+        print(f"[_require_author] falling back to secondary email lookup, auth_email: {auth_email}")
         if auth_email:
             result = (
                 supabase.table("users")
@@ -63,14 +68,15 @@ def _require_author(current_user: TokenData):
                 .maybe_single()
                 .execute()
             )
+            print(f"[_require_author] secondary lookup result: {result.data}")
 
     if not result.data or not result.data.get("is_author"):
+        print(f"[_require_author] DENIED — is_author: {result.data.get('is_author') if result.data else 'no user found'}")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Author access required.")
 
-    # Override with real primary user ID so all downstream queries use the correct ID
+    print(f"[_require_author] APPROVED — overriding user_id to: {result.data['id']}")
     current_user.user_id = result.data["id"]
     return current_user
-
 
 # ─────────────────────────────────────────────
 #  AUTHOR PROFILE
